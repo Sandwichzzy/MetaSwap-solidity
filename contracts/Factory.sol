@@ -5,6 +5,7 @@ import "./interfaces/IFactory.sol";
 import "./Pool.sol";
 
 contract Factory is IFactory {
+
     Parameters public override parameters;
 
     mapping(address => mapping(address => address[])) public  pools;
@@ -19,9 +20,22 @@ contract Factory is IFactory {
 
         address token0;
         address token1;
-        // sort token, avoid the mistake of the order
+        // sort token, avoid the mistake of the order 将tokenA和tokenB按大小排序
         (token0,token1) = sortToken(tokenA, tokenB);
 
+        //get current all pools
+        address[] memory existingPools  = pools[token0][token1];
+        // check if the pool already exists 
+        // 有点耗gas，可以优化
+        for(uint i = 0; i < existingPools.length; i++){
+            IPool currentPool =IPool(existingPools[i]);
+            if (currentPool.tickLower() == tickLower && 
+                currentPool.tickUpper() == tickUpper && 
+                currentPool.fee() == fee){
+                // if the pool already exists, return the pool
+                return existingPools[i];
+            }
+        }
         //save the pool info
         parameters = Parameters(address(this), tokenA, tokenB, tickLower, tickUpper, fee);
         // generate create2 salt
@@ -34,6 +48,25 @@ contract Factory is IFactory {
         pools[token0][token1].push(pool);
         // delete pool info
         delete parameters;
+        //emit PoolCreated event
+        emit PoolCreated(token0, token1, uint32(existingPools.length), tickLower, tickUpper, fee, pool);
     }
 
+    function getPool(address tokenA, address tokenB, uint32 index) external view override returns (address pool){
+        require(tokenA != tokenB, "TokenA and TokenB cannot be the same");
+        require(tokenA != address(0) && tokenB != address(0), "ZERO_ADDRESS");
+
+        address token0;
+        address token1;
+
+        (token0,token1) = sortToken(tokenA, tokenB);
+
+        pool = pools[token0][token1][index];
+
+        require(pool != address(0), "POOL_NOT_EXISTS");
+
+        return pool;
+    }
+
+    
 }
