@@ -20,7 +20,7 @@ import "./interfaces/IPoolManager.sol";
 
 //对于 Pool 合约来说，流动性都是 PositionManager 合约掌管，
 //PositionManager 相当于代管了 LP 的流东西，所以需要在它内部再存储下相关信息。
-contract PositionManager is IPositionManager, ERC721,IMintCallback{
+contract PositionManager is IPositionManager, ERC721{
     // 保存 PoolManager 合约地址
     IPoolManager public poolManager;
     /// @dev The ID of the next token that will be minted. Skips 0
