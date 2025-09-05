@@ -1,6 +1,14 @@
 //SPDX-License-Identifier: MIT
 pragma solidity ^0.8.0;
 
+interface IMintCallback {
+    function mintCallback(uint256 amount0Owed, uint256 amount1Owed, bytes calldata data) external;
+}
+
+interface ISwapCallback {
+    function swapCallback(int256 amount0Delta, int256 amount1Delta, bytes calldata data) external;
+}
+
 interface IPool {
     function factory() external view returns (address);
     function token0() external view returns (address);
