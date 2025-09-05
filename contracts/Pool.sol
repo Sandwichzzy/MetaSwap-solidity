@@ -18,6 +18,9 @@ import "./interfaces/IPool.sol";
 //在 Uniswap V3 中，你需要在一个交易池里面去管理在不同价格区间内的流动性
 //这里简化了 只需要考虑这个固定范围内的流动性管理和交易即可，
 contract Pool is IPool {
+    using SafeCast for uint256;
+    using LowGasSafeMath for int256;
+    using LowGasSafeMath for uint256;
     address public immutable override factory;
     address public immutable override token0;
     address public immutable override token1;
@@ -29,6 +32,9 @@ contract Pool is IPool {
     int24 public immutable override tick;
     uint128 public immutable override liquidity;
 
+    uint256 public immutable override feeGrowthGlobal0X128;
+    uint256 public immutable override feeGrowthGlobal1X128;
+
     mapping(address => Position) public  positions; 
 
     // 记录流动性
@@ -36,6 +42,8 @@ contract Pool is IPool {
         uint128 liquidity;// 该 Position 拥有的流动性
         uint256 tokensOwed0;// 可提取的 token0 数量
         uint256 tokensOwed1;// 可提取的 token1 数量
+        uint256 feeGrowthInside0LastX128;// 上次提取手续费时的 feeGrowthGlobal0X128
+        uint256 feeGrowthInside1LastX128;// 上次提取手续费是的 feeGrowthGlobal1X128
     }
     // 用一个 mapping 来存放所有 Position 的信息，key 是地址，value 是 Position 结构体
     mapping(address => Position) public positions;
@@ -52,8 +60,19 @@ contract Pool is IPool {
 
     function initialize(uint160 _sqrtPriceX96) external override {
         require(sqrtPriceX96 == 0, "Already initialized");
+         // 通过价格获取 tick，判断 tick 是否在 tickLower 和 tickUpper 之间
+        tick=TickMath.getTickAtSqrtRatio(_sqrtPriceX96);
+        require(tick >= tickLower && tick <= tickUpper, "sqrtPriceX96 should be within the range of [tickLower, tickUpper)");
         // 初始化 Pool 的 sqrtPriceX96
         sqrtPriceX96 = _sqrtPriceX96;
+    }
+
+    
+    struct ModifyPositionParams {
+         // the address that owns the position
+        address owner;
+        // any change in liquidity
+        int128 liquidityDelta;
     }
 
     // 添加流动性
@@ -63,24 +82,33 @@ contract Pool is IPool {
     // 添加流动性后，需要回调 mintCallback 方法，这个方法需要传入 amount0 和 amount1，
     function mint(address recipent,uint128 amount,bytes calldata data) 
         external override returns (uint256 amount0,uint256 amount1){
-        // 基于 amount 计算出当前需要多少 amount0 和 amount1
-        // TODO 当前先写个假的
-        (amount0, amount1) = (amount / 2, amount / 2);
-        // 把流动性记录到对应的 position 中
-        positions[recipent].liquidity += amount;
-        // 回调 mintCallback
-        IMintCallback(msg.sender).mintCallback(amount0, amount1, data);
-        // TODO 检查钱到位了没有，如果到位了对应修改相关信息
-        // 触发 Mint 事件
-        emit Mint(msg.sender, recipent, amount, amount0, amount1);
+            require(amount > 0, "Amount must be greater than 0");
+            // 基于 amount 计算出当前需要多少 amount0 和 amount1
+            (int256 amount0Int,int256 amount1Int) = _modifyPosition(
+                ModifyPositionParams({
+                    owner: recipent, 
+                    liquidityDelta: amount
+                })
+            );
+            amount0=uint256(amount0Int);
+            amount1=uint256(amount1Int);
+            uint256 balance0Before;
+            uint256 balance1Before;
+            if (amount0 > 0) balance0Before=_balance0();
+            if (amount1 > 0) balance1Before=_balance1();
+            // 回调 mintCallback 调用 `mint` 方法的合约需要实现 `IUniswapV3MintCallback` 接口完成代币的转入操作：
+            IMintCallback(msg.sender).mintCallback(amount0, amount1, data);
+            //回调完成后会检查交易池合约的对应余额是否发生变化，并且增量应该大于 amount0 和 amount1：这意味着调用方确实转入了所需的资产。
+            if (amount0 > 0) {
+                require(balance0Before.add(amount0)<=_balance0(), "M0");
+            }
+            if (amount1 > 0) {
+                require(balance1Before.add(amount1)<=_balance1(), "M1");
+            }
+            // 触发 Mint 事件
+            emit Mint(msg.sender, recipent, amount, amount0, amount1);
     }
 
-    struct ModifyPositionParams {
-         // the address that owns the position
-        address owner;
-        // any change in liquidity
-        int128 liquidityDelta;
-    }
 
     //Uniswap V3 中，计算流动性时的上下限是参数动态传入的 params.tickLower 和 params.tickUpper
     //MetaSwap 交易池都固定在一个价格区间内，mint 也只能在这个价格区间内 mint，所以 tickLower 和 tickUpper 是固定的
@@ -93,33 +121,78 @@ contract Pool is IPool {
         amount0=SqrtPriceMath.getAmount0Delta(sqrtPriceX96,TickMath.getSqrtRatioAtTick(tickUpper),params.liquidityDelta);
         amount1=SqrtPriceMath.getAmount1Delta(sqrtPriceX96,TickMath.getSqrtRatioAtTick(tickLower),params.liquidityDelta);
 
-        // 获取当前用户的 position，TODO recipient 应该改为 msg.sender
+        // 获取当前用户的 position，recipient 应该改为 msg.sender
         Position storage position = positions[params.owner];
 
+        //关键步骤：结算未领取的费用
+        //将费用增长因子差值乘以头寸原有的流动性数量，再除以 Q128（一个固定点数精度常量），得到应累加的费用代币数量。
+        uint tokensOwed0 = uint128(FullMath.mulDiv(feeGrowthGlobal0X128-position.feeGrowthInside0LastX128,position.liquidity,FixedPoint128.Q128));
+        uint tokensOwed1 = uint128(FullMath.mulDiv(feeGrowthGlobal1X128-position.feeGrowthInside1LastX128,position.liquidity,FixedPoint128.Q128));
+
+         // 更新提取手续费的记录，同步到当前最新的 feeGrowthGlobal0X128，代表都提取完了
+        position.feeGrowthInside0LastX128 = feeGrowthGlobal0X128;
+        position.feeGrowthInside1LastX128 = feeGrowthGlobal1X128;
+        // 把可以提取的手续费记录到 tokensOwed0 和 tokensOwed1 中
+        // LP 可以通过 collect 来最终提取到用户自己账户上
+        if (tokensOwed0 > 0) {
+            position.tokensOwed0 += tokensOwed0;
+        }
+        if (tokensOwed1 > 0) {
+            position.tokensOwed1 += tokensOwed1;
+        }
+        // 修改 liquidity 和 position.liquidity
+        liquidity=LiquidityMath.addDelta(liquidity,params.liquidityDelta);
+        position.liquidity=LiquidityMath.addDelta(position.liquidity,params.liquidityDelta);
     }
 
 
-    function collect(address recipient) external override returns (uint256 amount0,uint256 amount1){
-         // 获取当前用户的 position，TODO recipient 应该改为 msg.sender
-         Position storage position = positions[recipient];
-         // TODO 把钱退给用户 recipient
-         // 修改 position 中的信息
-         position.tokensOwed0 -= amount0;
-         position.tokensOwed1 -= amount1;
-
-         // 触发 Collect 事件
-         emit Collect(recipient, amount0, amount1);
-    }
-
+    //它不需要有回调，另外提取代币是放到 collect 中操作的。
+    //在 burn 方法中，我们只是把流动性移除，并计算出要退回给 LP 的 amount0 和 amount1，记录在合约状态中
     function burn(uint128 amount) external override returns (uint256 amount0,uint256 amount1){
+        require(amount > 0, "Burn Amount must be greater than 0");
+        require(amount <=positions[msg.sender].liquidity,"Burn amount exceeds liquidity");
         // 修改 positions 中的信息
-        positions[msg.sender].liquidity -= amount;
-         // 获取燃烧后的 amount0 和 amount1
-        // TODO 当前先写个假的
-        (amount0, amount1) = (amount / 2, amount / 2);
-        positions[msg.sender].tokensOwed0 += amount0;
-        positions[msg.sender].tokensOwed1 += amount1;
+        (int256 amount0Int,int256 amount1Int)=_modifyPosition(ModifyPositionParams({
+            owner: msg.sender,
+            liquidityDelta: -int128(amount)
+        }));
+        // 获取燃烧后的退换的 amount0 和 amount1
+        amount0=uint256(-amount0Int);
+        amount1=uint256(-amount1Int);
+
+        if (amount0 > 0 || amount1 > 0) {
+            (
+                positions[msg.sender].tokensOwed0,
+                positions[msg.sender].tokensOwed1
+            ) = (
+                positions[msg.sender].tokensOwed0 + uint128(amount0),
+                positions[msg.sender].tokensOwed1 + uint128(amount1)
+            );
+        }
+
         emit Burn(msg.sender, amount, amount0, amount1);
+    }
+
+    //Position 中定义了 tokensOwed0 和 tokensOwed1，
+    //用来记录 LP 可以提取的代币数量，这个代币数量是在 collect 中提取的
+    function collect(address recipient,uint128 amount0Requested,uint128 amount1Requested) 
+        external override returns (uint128 amount0,uint128 amount1){
+            // 获取当前用户的 position
+            Position storage position = positions[msg.sender];
+            // 把钱退给用户 recipient
+            amount0=amount0Requested>position.tokensOwed0?position.tokensOwed0:amount0Requested;
+            amount1=amount1Requested>position.tokensOwed1?position.tokensOwed1:amount1Requested;
+
+            if (amount0 > 0) {
+                position.tokensOwed0 -= amount0;
+                TransferHelper.safeTransfer(token0, recipient, amount0);
+            }
+            if (amount1 > 0) {
+                position.tokensOwed1 -= amount1;
+                TransferHelper.safeTransfer(token1, recipient, amount1);
+            }
+            // 触发 Collect 事件
+            emit Collect(recipient, amount0, amount1);
     }
 
     function swap(address recipient, 
@@ -128,5 +201,17 @@ contract Pool is IPool {
         uint160 sqrtPriceLimitX96, 
         bytes calldata data) external override returns (int256 amount0, int256 amount1){
 
+    }
+    /// @dev Get the pool's balance of token0
+    function _balance0() private view returns (uint256){
+        (bool success,bytes memory data)=token0.staticcall(abi.encodeWithSelector(IERC20.balanceOf.selector, address(this)));
+        require(success&&data.length>=32,"Failed to get balance of token0");
+        return abi.decode(data, (uint256));
+    }
+
+    function _balance1() private view returns (uint256){
+        (bool success,bytes memory data)=token1.staticcall(abi.encodeWithSelector(IERC20.balanceOf.selector, address(this)));
+        require(success&&data.length>=32,"Failed to get balance of token1");
+        return abi.decode(data, (uint256));
     }
 }
