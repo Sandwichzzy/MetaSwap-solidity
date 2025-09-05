@@ -35,7 +35,6 @@ contract Pool is IPool {
     uint256 public immutable override feeGrowthGlobal0X128;
     uint256 public immutable override feeGrowthGlobal1X128;
 
-    mapping(address => Position) public  positions; 
 
     // 记录流动性
     struct Position{
@@ -96,7 +95,7 @@ contract Pool is IPool {
             uint256 balance1Before;
             if (amount0 > 0) balance0Before=_balance0();
             if (amount1 > 0) balance1Before=_balance1();
-            // 回调 mintCallback 调用 `mint` 方法的合约需要实现 `IUniswapV3MintCallback` 接口完成代币的转入操作：
+            // 回调 mintCallback 调用 `mint` 方法的合约需要实现 `IMintCallback` 接口完成代币的转入操作：
             IMintCallback(msg.sender).mintCallback(amount0, amount1, data);
             //回调完成后会检查交易池合约的对应余额是否发生变化，并且增量应该大于 amount0 和 amount1：这意味着调用方确实转入了所需的资产。
             if (amount0 > 0) {
@@ -221,8 +220,9 @@ contract Pool is IPool {
         bool zeroForOne, 
         int256 amountSpecified,  
         uint160 sqrtPriceLimitX96, 
-        bytes calldata data
-    ) external override returns (int256 amount0, int256 amount1){
+        bytes calldata data) external override returns (int256 amount0, int256 amount1)
+        {
+        // 检查 amountSpecified 是否为 0
         require(amountSpecified != 0, "AS");
         // 对于 zeroForOne 方向，token0 换 token1,交易会导致池子的 token0 变多，
         // 价格下跌，我们需要验证 sqrtPriceLimitX96 必须小于当前的价格，
@@ -310,7 +310,7 @@ contract Pool is IPool {
             if(amount1 <0)
                 TransferHelper.safeTransfer(token1, recipient, uint256(-amount1));
             }
-        }else{
+        else{
            // callback 中需要给 Pool 转入 token
             uint256 balance1Before = balance1();
             ISwapCallback(msg.sender).swapCallback(amount0, amount1, data);
@@ -334,4 +334,21 @@ contract Pool is IPool {
         require(success&&data.length>=32,"Failed to get balance of token1");
         return abi.decode(data, (uint256));
     }
+
+    function getPosition(address owner) external view override returns 
+    (
+        uint128 _liquidity, 
+        uint256 feeGrowthInside0LastX128,
+        uint256 feeGrowthInside1LastX128,
+        uint256 tokensOwed0,
+        uint256 tokensOwed1
+    ){
+        return (
+            positions[owner].liquidity,
+            positions[owner].feeGrowthInside0LastX128,
+            positions[owner].feeGrowthInside1LastX128,
+            positions[owner].tokensOwed0,
+            positions[owner].tokensOwed1
+        );
+    } 
 }

@@ -2,6 +2,7 @@
 pragma solidity ^0.8.0;
 
 import {IERC721} from "@openzeppelin/contracts/token/ERC721/IERC721.sol";
+import "./IPool.sol";
 
 interface IPositionManager is IERC721 {
     struct PositionInfo{
@@ -32,5 +33,13 @@ interface IPositionManager is IERC721 {
         uint256 deadline;
     }
 
-    function mint(MintParams calldata params) external payable returns (uint256 positionId, uint128 liquidity, uint256 amount0, uint256 amount1);
+    function mint(MintParams calldata params) external payable returns 
+    (uint256 positionId, uint128 liquidity, uint256 amount0, uint256 amount1);
+
+    function burn(uint256 positionId) external returns (uint256 amount0, uint256 amount1);
+
+    function collect(uint256 positionId, address recipient) 
+    external returns (uint256 amount0, uint256 amount1);
+
+    function mintCallback(uint256 amount0, uint256 amount1, bytes calldata data) external;
 }
