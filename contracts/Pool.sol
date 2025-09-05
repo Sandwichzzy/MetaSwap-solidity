@@ -134,13 +134,11 @@ contract Pool is IPool {
         position.feeGrowthInside1LastX128 = feeGrowthGlobal1X128;
         // 把可以提取的手续费记录到 tokensOwed0 和 tokensOwed1 中
         // LP 可以通过 collect 来最终提取到用户自己账户上
-        if (tokensOwed0 > 0) {
+        if (tokensOwed0 > 0 || tokensOwed1 > 0) {
             position.tokensOwed0 += tokensOwed0;
-        }
-        if (tokensOwed1 > 0) {
             position.tokensOwed1 += tokensOwed1;
         }
-        // 修改 liquidity 和 position.liquidity
+        // 修改池子 liquidity 和头寸 position.liquidity
         liquidity=LiquidityMath.addDelta(liquidity,params.liquidityDelta);
         position.liquidity=LiquidityMath.addDelta(position.liquidity,params.liquidityDelta);
     }
@@ -271,7 +269,17 @@ contract Pool is IPool {
         tick=TickMath.getTickAtSqrtRatio(sqrtPriceX96);
 
         //计算手续费
-        //TODO 这里需要计算手续费
+        //手续费乘以 FixedPoint128.Q128（2 的 96 次方），然后除以流动性数量得到的 （池子单个流动性单位手续费）
+        state.feeGrowthGlobalX128 += FullMath.mulDiv(
+            state.feeAmount,
+            FixedPoint128.Q128,
+            liquidity
+        );
+        if(zeroForOne){
+            feeGrowthGlobal0X128=state.feeGrowthGlobalX128;
+        }else{
+            feeGrowthGlobal1X128=state.feeGrowthGlobalX128;
+        }
 
         //计算交易后用户手里的token0和token1的数量
         //根据精确输入或精确输出模式，更新剩余交换量和计算量。
