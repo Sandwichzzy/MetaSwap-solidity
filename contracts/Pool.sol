@@ -195,12 +195,124 @@ contract Pool is IPool {
             emit Collect(recipient, amount0, amount1);
     }
 
-    function swap(address recipient, 
-        bool zeroForOne, 
-        int256 amountSpecified, 
-        uint160 sqrtPriceLimitX96, 
-        bytes calldata data) external override returns (int256 amount0, int256 amount1){
+    // 交易中需要临时存储的变量
+    struct SwapParams {
+        // 剩余需要交换的数量
+        int256 amountSpecifiedRemaining;
+        // 已计算出的数量
+        int256 amountCalculated;
+        // 当前价格
+        uint160 sqrtPriceX96;
+         // 全局费用增长，根据方向选择 token0 或token1 的费用增长。
+        uint256 feeGrowthGlobalX128;
+        // 该交易中用户转入的 token 的数量
+        uint256 amountIn;
+         // 该交易中用户转出的 token 的数量
+        uint256 amountOut;
+        // 该交易中需要支付的手续费 如果 zeroForOne 是 ture，则是用户转入 token0，单位是 token0 的数量，反正是 token1 的数量
+        uint256 feeAmount;
+    }
 
+
+    //amountSpecified:指定的代币数量，指定输入的代币数量(要支付的 token0 的数量)则为正数，指定输出的代币(要获取的 token1)数量则为负数
+    //sqrtPriceLimitX96: 价格限制，如果从 token0 交换 token1 则限定价格下限，从 token1 交换 token0 则限定价格上限
+    //如果从 token0 交换 token1 则限定价格下限，从 token1 交换 token0 则限定价格上限
+    //data: 回调数据
+    function swap(
+        address recipient, 
+        bool zeroForOne, 
+        int256 amountSpecified,  
+        uint160 sqrtPriceLimitX96, 
+        bytes calldata data
+    ) external override returns (int256 amount0, int256 amount1){
+        require(amountSpecified != 0, "AS");
+        // 对于 zeroForOne 方向，token0 换 token1,交易会导致池子的 token0 变多，
+        // 价格下跌，我们需要验证 sqrtPriceLimitX96 必须小于当前的价格，
+        // 对于 !zeroForOne 方向，价格限制必须高于当前价格但低于最大价格
+        require(
+            zeroForOne 
+             ? sqrtPriceLimitX96 < sqrtPriceX96 && sqrtPriceLimitX96 > TickMath.MIN_SQRT_RATIO
+             : sqrtPriceLimitX96 > sqrtPriceX96 && sqrtPriceLimitX96 < TickMath.MAX_SQRT_RATIO,
+            "SPL"
+        );
+
+        bool exactInput=amountSpecified>0; //判断是输入还是输出模式
+        SwapState memory state =SwapState({
+            amountSpecifiedRemaining: amountSpecified,
+            amountCalculated: 0,
+            sqrtPriceX96: sqrtPriceX96,
+            feeGrowthGlobalX128: zeroForOne
+                ? feeGrowthGlobal0X128
+                : feeGrowthGlobal1X128,
+            amountIn: 0,
+            amountOut: 0,
+            feeAmount: 0
+        });
+        // 计算交易的上下限，基于 tick 计算价格
+        uint160 sqrtPriceX96Lower =TickMath.getSqrtRatioAtTick(tickLower);
+        uint160 sqrtPriceX96Upper =TickMath.getSqrtRatioAtTick(tickUpper);
+        // 计算用户交易价格的限制，如果是 zeroForOne 是 true，说明用户会换入 token0，
+        // 会压低 token0 的价格（也就是池子的价格），所以要限制最低价格不能超过 sqrtPriceX96Lower
+        uint160 sqrtPriceX96PoolLimit  == zeroForOne
+            ? sqrtPriceX96Lower
+            : sqrtPriceX96Upper;
+        //  SwapMath.computeSwapStep 计算当前步骤的输入量、输出量、费用和新价格。
+        (state.sqrtPriceX96,state.amountIn,state.amountOut,state.feeAmount)=SwapMath.computeSwapStep(
+            sqrtPriceX96,
+            (zeroForOne ? sqrtPriceX96PoolLimit < sqrtPriceLimitX96 : sqrtPriceX96PoolLimit > sqrtPriceLimitX96)
+            ?sqrtPriceLimitX96:sqrtPriceX96PoolLimit,
+            liquidity,
+            amountSpecified, // 第一次剩余需要交换的数量=指定输入的代币数量(要支付的 token0 的数量)
+            fee,
+        );
+
+        //更新后的价格
+        sqrtPriceX96=state.sqrtPriceX96;
+        tick=TickMath.getTickAtSqrtRatio(sqrtPriceX96);
+
+        //计算手续费
+        //TODO 这里需要计算手续费
+
+        //计算交易后用户手里的token0和token1的数量
+        //根据精确输入或精确输出模式，更新剩余交换量和计算量。
+        if(exactInput){
+            //精确输入: amountSpecifiedRemaining 减少（输入量 + 费用），amountCalculated 减少输出量（因为输出为负）
+            state.amountSpecifiedRemaining -=(state.amountIn+state.feeAmount).toInt256();
+            state.amountCalculated = state.amountCalculated.sub(state.amountOut).toInt256();
+        }else{
+            //精确输出: amountSpecifiedRemaining 增加输出量（因为输出为负），amountCalculated 增加（输入量 + 费用）。
+            state.amountSpecifiedRemaining +=state.amountOut.toInt256();
+            state.amountCalculated = state.amountCalculated.add(state.amountIn+state.feeAmount).toInt256();
+        }
+        // 计算最终代币变化量
+        (amount0,amount1)= zeroForOne == exactInput
+            ? (amountSpecified - state.amountSpecifiedRemaining, state.amountCalculated)
+            : (state.amountCalculated, amountSpecified - state.amountSpecifiedRemaining);
+
+
+        // 执行代币转账和回调
+        if (zeroForOne){
+            // 记录当前余额，用于后续检查
+            uint256 balance0Before=_balance0();
+            // 调用回调函数，要求调用者支付token0 给 Pool 转入 token0
+            ISwapCallback(msg.sender).swapCallback(amount0, amount1, data);
+            // 检查余额变化，确保调用者支付了足够的token0
+            require(balance0Before.add(uint256(amount0))<=_balance0(), "IIA");
+            // 如果是token0 → token1，将token1转账给接收者
+            if(amount1 <0)
+                TransferHelper.safeTransfer(token1, recipient, uint256(-amount1));
+            }
+        }else{
+           // callback 中需要给 Pool 转入 token
+            uint256 balance1Before = balance1();
+            ISwapCallback(msg.sender).swapCallback(amount0, amount1, data);
+            require(balance1Before.add(uint256(amount1))<=_balance1(), "IIA");
+             // 转 Token 给用户
+             if(amount0 <0){
+                TransferHelper.safeTransfer(token0, recipient, uint256(-amount0));
+             }
+        }
+        emit Swap(msg.sender, recipient, amount0, amount1, sqrtPriceX96, liquidity,tick);
     }
     /// @dev Get the pool's balance of token0
     function _balance0() private view returns (uint256){
