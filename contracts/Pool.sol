@@ -24,34 +24,53 @@ contract Pool is IPool {
     using SafeCast for uint256;
     using LowGasSafeMath for int256;
     using LowGasSafeMath for uint256;
+
+    // ============ 不可变状态变量 ============
+    
     address public immutable override factory;
+
     address public immutable override token0;
+
     address public immutable override token1;
+
     uint24 public immutable override fee;
+
     int24 public immutable override tickLower;
+
     int24 public immutable override tickUpper;
 
-    uint160 public immutable override sqrtPriceX96;
-    int24 public immutable override tick;
-    uint128 public immutable override liquidity;
+    // ============ 可变状态变量 ============
+    
+    uint160 public override sqrtPriceX96;
 
-    uint256 public immutable override feeGrowthGlobal0X128;
-    uint256 public immutable override feeGrowthGlobal1X128;
+    int24 public override tick;
+
+    uint128 public override liquidity;
+
+    uint256 public override feeGrowthGlobal0X128;
+
+    uint256 public override feeGrowthGlobal1X128;
 
 
-    // 记录流动性
+    /**
+     * @notice 流动性位置结构体
+     * @dev 存储每个地址的流动性位置信息
+     */
     struct Position{
         uint128 liquidity;// 该 Position 拥有的流动性
-        uint256 tokensOwed0;// 可提取的 token0 数量
-        uint256 tokensOwed1;// 可提取的 token1 数量
+        uint128 tokensOwed0;// 可提取的 token0 数量
+        uint128 tokensOwed1;// 可提取的 token1 数量
         uint256 feeGrowthInside0LastX128;// 上次提取手续费时的 feeGrowthGlobal0X128
         uint256 feeGrowthInside1LastX128;// 上次提取手续费是的 feeGrowthGlobal1X128
     }
     // 用一个 mapping 来存放所有 Position 的信息，key 是地址，value 是 Position 结构体
     mapping(address => Position) public positions;
     
+    /**
+     * @notice 构造函数 - 从Factory读取池参数
+     * @dev 使用CREATE2部署，参数通过Factory的parameters变量传递
+     */
     constructor(){
-        // constructor 中初始化 immutable 的常量
         // Factory 创建 Pool 时会通 new Pool{salt: salt}() 的方式创建 Pool 合约，
         // 通过 salt 指定 Pool 的地址，这样其他地方也可以推算出 Pool 的地址
         // 参数通过读取 Factory 合约的 parameters 获取
@@ -60,6 +79,11 @@ contract Pool is IPool {
         (factory, token0, token1, tickLower, tickUpper,fee) = IFactory(msg.sender).parameters();
     }
 
+    /**
+     * @notice 初始化池的价格
+     * @param _sqrtPriceX96 初始价格的平方根（X96格式）
+     * @dev 只能初始化一次，价格必须在tick范围内
+    */
     function initialize(uint160 _sqrtPriceX96) external override {
         require(sqrtPriceX96 == 0, "Already initialized");
          // 通过价格获取 tick，判断 tick 是否在 tickLower 和 tickUpper 之间
@@ -110,7 +134,7 @@ contract Pool is IPool {
 
     //Uniswap V3 中，计算流动性时的上下限是参数动态传入的 params.tickLower 和 params.tickUpper
     //MetaSwap 交易池都固定在一个价格区间内，mint 也只能在这个价格区间内 mint，所以 tickLower 和 tickUpper 是固定的
-    function _modifyPosition(ModifyPositionParams calldata params) private returns(int256 amount0,int256 amount1){
+    function _modifyPosition(ModifyPositionParams memory params) private returns(int256 amount0,int256 amount1){
         // 通过新增的流动性计算 amount0 和 amount1
         // 参考 UniswapV3 的代码
         // 用到 SqrtPriceMath 库，这个库是 Uniswap V3 中的一个工具库
@@ -124,8 +148,20 @@ contract Pool is IPool {
 
         //关键步骤：结算未领取的费用
         //将费用增长因子差值乘以头寸原有的流动性数量，再除以 Q128（一个固定点数精度常量），得到应累加的费用代币数量。
-        uint tokensOwed0 = uint128(FullMath.mulDiv(feeGrowthGlobal0X128-position.feeGrowthInside0LastX128,position.liquidity,FixedPoint128.Q128));
-        uint tokensOwed1 = uint128(FullMath.mulDiv(feeGrowthGlobal1X128-position.feeGrowthInside1LastX128,position.liquidity,FixedPoint128.Q128));
+        uint128 tokensOwed0 = uint128(
+            FullMath.mulDiv(
+                feeGrowthGlobal0X128 - position.feeGrowthInside0LastX128,
+                position.liquidity,
+                FixedPoint128.Q128
+            )
+        );
+        uint128 tokensOwed1 = uint128(
+            FullMath.mulDiv(
+                feeGrowthGlobal1X128 - position.feeGrowthInside1LastX128,
+                position.liquidity,
+                FixedPoint128.Q128
+            )
+        );
 
          // 更新提取手续费的记录，同步到当前最新的 feeGrowthGlobal0X128，代表都提取完了
         position.feeGrowthInside0LastX128 = feeGrowthGlobal0X128;
@@ -148,10 +184,12 @@ contract Pool is IPool {
         require(amount > 0, "Burn Amount must be greater than 0");
         require(amount <=positions[msg.sender].liquidity,"Burn amount exceeds liquidity");
         // 修改 positions 中的信息
-        (int256 amount0Int,int256 amount1Int)=_modifyPosition(ModifyPositionParams({
-            owner: msg.sender,
-            liquidityDelta: -int128(amount)
-        }));
+        (int256 amount0Int, int256 amount1Int) = _modifyPosition(
+            ModifyPositionParams({
+                owner: msg.sender,
+                liquidityDelta: -int128(amount)
+            })
+        );
         // 获取燃烧后的退换的 amount0 和 amount1
         amount0=uint256(-amount0Int);
         amount1=uint256(-amount1Int);
@@ -171,24 +209,31 @@ contract Pool is IPool {
 
     //Position 中定义了 tokensOwed0 和 tokensOwed1，
     //用来记录 LP 可以提取的代币数量，这个代币数量是在 collect 中提取的
-    function collect(address recipient,uint128 amount0Requested,uint128 amount1Requested) 
-        external override returns (uint128 amount0,uint128 amount1){
-            // 获取当前用户的 position
-            Position storage position = positions[msg.sender];
-            // 把钱退给用户 recipient
-            amount0=amount0Requested>position.tokensOwed0?position.tokensOwed0:amount0Requested;
-            amount1=amount1Requested>position.tokensOwed1?position.tokensOwed1:amount1Requested;
+     function collect(
+        address recipient,
+        uint128 amount0Requested,
+        uint128 amount1Requested
+    ) external override returns (uint128 amount0, uint128 amount1) {
+        // 获取当前用户的 position
+        Position storage position = positions[msg.sender];
+        // 把钱退给用户 recipient
+        amount0 = amount0Requested > position.tokensOwed0
+            ? position.tokensOwed0
+            : amount0Requested;
+        amount1 = amount1Requested > position.tokensOwed1
+            ? position.tokensOwed1
+            : amount1Requested;
 
-            if (amount0 > 0) {
-                position.tokensOwed0 -= amount0;
-                TransferHelper.safeTransfer(token0, recipient, amount0);
-            }
-            if (amount1 > 0) {
-                position.tokensOwed1 -= amount1;
-                TransferHelper.safeTransfer(token1, recipient, amount1);
-            }
-            // 触发 Collect 事件
-            emit Collect(recipient, amount0, amount1);
+        if (amount0 > 0) {
+            position.tokensOwed0 -= amount0;
+            TransferHelper.safeTransfer(token0, recipient, amount0);
+        }
+        if (amount1 > 0) {
+            position.tokensOwed1 -= amount1;
+            TransferHelper.safeTransfer(token1, recipient, amount1);
+        }
+        // 触发 Collect 事件
+        emit Collect(msg.sender, recipient, amount0, amount1);
     }
 
     // 交易中需要临时存储的变量
@@ -228,8 +273,8 @@ contract Pool is IPool {
         // 对于 !zeroForOne 方向，价格限制必须高于当前价格但低于最大价格
         require(
             zeroForOne 
-             ? sqrtPriceLimitX96 < sqrtPriceX96 && sqrtPriceLimitX96 > TickMath.MIN_SQRT_RATIO
-             : sqrtPriceLimitX96 > sqrtPriceX96 && sqrtPriceLimitX96 < TickMath.MAX_SQRT_RATIO,
+             ? sqrtPriceLimitX96 < sqrtPriceX96 && sqrtPriceLimitX96 > TickMath.MIN_SQRT_PRICE
+             : sqrtPriceLimitX96 > sqrtPriceX96 && sqrtPriceLimitX96 < TickMath.MAX_SQRT_PRICE,
             "SPL"
         );
 
@@ -246,8 +291,8 @@ contract Pool is IPool {
             feeAmount: 0
         });
         // 计算交易的上下限，基于 tick 计算价格
-        uint160 sqrtPriceX96Lower =TickMath.getSqrtRatioAtTick(tickLower);
-        uint160 sqrtPriceX96Upper =TickMath.getSqrtRatioAtTick(tickUpper);
+        uint160 sqrtPriceX96Lower =TickMath.getSqrtPriceAtTick(tickLower);
+        uint160 sqrtPriceX96Upper =TickMath.getSqrtPriceAtTick(tickUpper);
         // 计算用户交易价格的限制，如果是 zeroForOne 是 true，说明用户会换入 token0，
         // 会压低 token0 的价格（也就是池子的价格），所以要限制最低价格不能超过 sqrtPriceX96Lower
         uint160 sqrtPriceX96PoolLimit = zeroForOne
@@ -264,7 +309,7 @@ contract Pool is IPool {
 
         //更新后的价格
         sqrtPriceX96=state.sqrtPriceX96;
-        tick=TickMath.getTickAtSqrtRatio(sqrtPriceX96);
+        tick=TickMath.getTickAtSqrtPrice(sqrtPriceX96);
 
         //计算手续费
         //手续费乘以 FixedPoint128.Q128（2 的 96 次方），然后除以流动性数量得到的 （池子单个流动性单位手续费）
@@ -283,12 +328,12 @@ contract Pool is IPool {
         //根据精确输入或精确输出模式，更新剩余交换量和计算量。
         if(exactInput){
             //精确输入: amountSpecifiedRemaining 减少（输入量 + 费用），amountCalculated 减少输出量（因为输出为负）
-            state.amountSpecifiedRemaining -=(state.amountIn+state.feeAmount).toInt256();
-            state.amountCalculated = state.amountCalculated.sub(state.amountOut).toInt256();
+            state.amountSpecifiedRemaining -= int256(state.amountIn + state.feeAmount);
+            state.amountCalculated = state.amountCalculated.sub(int256(state.amountOut));
         }else{
             //精确输出: amountSpecifiedRemaining 增加输出量（因为输出为负），amountCalculated 增加（输入量 + 费用）。
-            state.amountSpecifiedRemaining +=state.amountOut.toInt256();
-            state.amountCalculated = state.amountCalculated.add(state.amountIn+state.feeAmount).toInt256();
+            state.amountSpecifiedRemaining += int256(state.amountOut);
+            state.amountCalculated = state.amountCalculated.add(int256(state.amountIn + state.feeAmount));
         }
         // 计算最终代币变化量
         (amount0,amount1)= zeroForOne == exactInput
@@ -333,20 +378,19 @@ contract Pool is IPool {
         return abi.decode(data, (uint256));
     }
 
-    function getPosition(address owner) external view override returns 
-    (
-        uint128 _liquidity, 
-        uint256 feeGrowthInside0LastX128,
-        uint256 feeGrowthInside1LastX128,
-        uint256 tokensOwed0,
-        uint256 tokensOwed1
-    ){
-        return (
-            positions[owner].liquidity,
-            positions[owner].feeGrowthInside0LastX128,
-            positions[owner].feeGrowthInside1LastX128,
-            positions[owner].tokensOwed0,
-            positions[owner].tokensOwed1
-        );
-    } 
+
+    /**
+     * @notice 获取指定地址的流动性位置信息
+     * @param owner 位置所有者地址
+     */
+     function getPosition(address owner) external view override returns (uint128 _liquidity,uint256 feeGrowthInside0LastX128,uint256 feeGrowthInside1LastX128,uint128 tokensOwed0,uint128 tokensOwed1)
+        {
+            return (
+                positions[owner].liquidity,
+                positions[owner].feeGrowthInside0LastX128,
+                positions[owner].feeGrowthInside1LastX128,
+                positions[owner].tokensOwed0,
+                positions[owner].tokensOwed1
+            );
+        }
 }

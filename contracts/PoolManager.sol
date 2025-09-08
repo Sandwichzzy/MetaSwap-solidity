@@ -1,3 +1,4 @@
+//SPDX-License-Identifier: MIT
 //这个合约并不是必须的，它只是为了给前端提供数据，
 //推荐将这些数据存储在服务端（Uniswap 的做法），
 //通过调用服务端的接口来保存、获取这些数据，
@@ -35,6 +36,7 @@ contract PoolManager is Factory,IPoolManager {
                     IPool pool=IPool(addresses[j]);
                     poolsInfo[index] = PoolInfo(
                         {
+                            pool: addresses[j],
                             token0: pool.token0(),
                             token1: pool.token1(),
                             index: j,
