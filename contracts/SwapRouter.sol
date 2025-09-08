@@ -35,8 +35,8 @@ contract SwapRouter is ISwapRouter {
     function swapInPool(IPool pool,address recipient,bool zeroForOne,int256 amountSpecified,uint160 sqrtPriceLimitX96,bytes calldata data) 
         external returns (int256 amount0,int256 amount1)
     {
-        try {
-            (amount0,amount1)=pool.swap(recipient,zeroForOne,amountSpecified,sqrtPriceLimitX96,data);
+        try pool.swap(recipient,zeroForOne,amountSpecified,sqrtPriceLimitX96,data) returns (int256 _amount0, int256 _amount1) {
+            (amount0,amount1) = (_amount0, _amount1);
         } catch (bytes memory reason){
             (amount0,amount1)=parseRevertReason(reason);
         }
@@ -76,11 +76,11 @@ contract SwapRouter is ISwapRouter {
                 params.tokenOut,
                 params.indexPath[i],
                 params.recipient == address(0) ? address(0) : msg.sender,
-                true,
+                true
             );
 
              // 调用 pool 的 swap 函数，进行交换，并拿到返回的 token0 和 token1 的数量
-            (int256 amount0,int256 amount1)=swapInPool(
+            (int256 amount0,int256 amount1)=this.swapInPool(
                 pool,
                 params.recipient,
                 zeroForOne,
@@ -143,7 +143,7 @@ contract SwapRouter is ISwapRouter {
             );
 
             // 调用 pool 的 swap 函数，进行交换，并拿到返回的 token0 和 token1 的数量
-            (int256 amount0, int256 amount1) = swapInPool(
+            (int256 amount0, int256 amount1) = this.swapInPool(
                 pool,
                 params.recipient,
                 zeroForOne,

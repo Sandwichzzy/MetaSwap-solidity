@@ -15,8 +15,8 @@ interface IPositionManager is IERC721,IMintCallback {
         uint128 liquidity;
         int24 tickLower;
         int24 tickUpper;
-        uint256 tokensOwed0;
-        uint256 tokensOwed1;
+        uint128 tokensOwed0;
+        uint128 tokensOwed1;
         uint256 feeGrowthInside0LastX128;
         uint256 feeGrowthInside1LastX128;
     }

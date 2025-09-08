@@ -23,9 +23,9 @@ module.exports = {
       url: process.env.SEPOLIA_URL,
       accounts: [
         process.env.PRIVATE_KEY,
-        process.env.PRIVATE_KEY2,
-        process.env.PRIVATE_KEY3,
-      ],
+        process.env.PRIVATE_KEY_2,
+        process.env.PRIVATE_KEY_3,
+      ].filter((key) => key !== undefined), // 过滤掉未定义的私钥
       chainId: 11155111,
       timeout: 120000,
     },

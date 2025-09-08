@@ -55,7 +55,7 @@ contract PoolManager is Factory,IPoolManager {
 
     
     
-    function createAndIntializePoolIfNecessary(CreateAndInitializeParams calldata params) external payable override returns (address pool){
+    function createAndInitializePoolIfNecessary(CreateAndInitializeParams calldata params) external payable override returns (address poolAddress){
         // 要求 token0 < token1。因为在这个方法中需要传入初始化的价格，而在交易池中价格是按照 token0/token1 的方式计算的，
         // 做这个限制可以避免 LP 不小心初始化错误的价格。
         require(params.token0 < params.token1, "TokenA must be less than TokenB");

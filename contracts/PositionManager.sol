@@ -62,7 +62,7 @@ contract PositionManager is IPositionManager, ERC721{
         // 通过 MintParams 里面的 token0 和 token1 以及 index 获取对应的 Pool
         // 调用 poolManager 的 getPool 方法获取 Pool 地址
         address _pool=poolManager.getPool(params.token0,params.token1,params.index);
-        Ipool pool=Ipool(_pool);
+        IPool pool=IPool(_pool);
 
         // 通过获取 pool 相关信息，结合 params.amount0Desired 和 params.amount1Desired 计算这次要注入的流动性
         uint160 sqrtPriceX96=pool.sqrtPriceX96();
@@ -77,12 +77,18 @@ contract PositionManager is IPositionManager, ERC721{
         );
         // data 是 mint 后回调 PositionManager 会额外带的数据
         // 需要 PoistionManger 实现回调mintCallback，在回调中给 Pool 打钱
-        bytes memory data=abi.encode(params.token0,params.token1,params.index,msg.sender)
+        bytes memory data=abi.encode(params.token0,params.token1,params.index,msg.sender);
         (amount0,amount1)=pool.mint(address(this),liquidity,data);
         // 创建 NFT 并发送给LP
         _mint(params.recipient,(positionId=_nextId++));
         // 更新 PositionInfo 信息
-        (,uint256 feeGrowthInside0LastX128,uint256 feeGrowthInside1LastX128,)=pool.getPosition(address(this));
+        (
+            ,
+            uint256 feeGrowthInside0LastX128,
+            uint256 feeGrowthInside1LastX128,
+            ,
+
+        ) = pool.getPosition(address(this));
 
         positions[positionId]=PositionInfo({
             id:positionId,
@@ -111,7 +117,7 @@ contract PositionManager is IPositionManager, ERC721{
         uint128 _liquidity=position.liquidity;
          // 调用 Pool 的方法给 LP 退流动性
         address _pool=poolManager.getPool(position.token0,position.token1,position.index);
-        Ipool pool=Ipool(_pool);
+        IPool pool=IPool(_pool);
         (amount0,amount1)=pool.burn(_liquidity);
         // 计算这部分流动性产生的手续费
         (
@@ -121,8 +127,8 @@ contract PositionManager is IPositionManager, ERC721{
             ,
         ) = pool.getPosition(address(this));
 
-        position.tokensOwed0+=uint128(amount0)+uint128(FullMath.mulDiv(feeGrowthInside0LastX128-position.feeGrowthInside0LastX128,positon.liquidity,FixedPoint128.Q128));
-        position.tokensOwed1+=uint128(amount1)+uint128(FullMath.mulDiv(feeGrowthInside1LastX128-position.feeGrowthInside1LastX128,positon.liquidity,FixedPoint128.Q128));
+        position.tokensOwed0+=uint128(amount0)+uint128(FullMath.mulDiv(feeGrowthInside0LastX128-position.feeGrowthInside0LastX128,position.liquidity,FixedPoint128.Q128));
+        position.tokensOwed1+=uint128(amount1)+uint128(FullMath.mulDiv(feeGrowthInside1LastX128-position.feeGrowthInside1LastX128,position.liquidity,FixedPoint128.Q128));
 
         // 更新 position 的信息
         position.feeGrowthInside0LastX128 = feeGrowthInside0LastX128;
@@ -137,7 +143,7 @@ contract PositionManager is IPositionManager, ERC721{
         // 调用 Pool 的方法给 LP 退流动性
         PositionInfo storage position=positions[positionId];
         address _pool=poolManager.getPool(position.token0,position.token1,position.index);
-        Ipool pool=Ipool(_pool);
+        IPool pool=IPool(_pool);
         (amount0, amount1) = pool.collect(
             recipient,
             position.tokensOwed0,

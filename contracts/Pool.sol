@@ -8,7 +8,10 @@ import "./libraries/TickMath.sol";
 import "./libraries/LiquidityMath.sol";
 import "./libraries/LowGasSafeMath.sol";
 import "./libraries/TransferHelper.sol";
-
+import "./libraries/SafeCast.sol";
+import "./libraries/FullMath.sol";
+import "./libraries/FixedPoint128.sol";
+import "./libraries/SwapMath.sol";
 
 import "./interfaces/IFactory.sol";
 import "./interfaces/IPool.sol";
@@ -54,13 +57,13 @@ contract Pool is IPool {
         // 参数通过读取 Factory 合约的 parameters 获取
         // 不通过构造函数传入，因为 CREATE2 会根据 
         // initcode 计算出新地址（new_address = hash(0xFF, sender, salt, bytecode)），带上参数就不能计算出稳定的地址了
-        (factory, token0, token1, fee, tickLower, tickUpper) = IFactory(msg.sender).parameters();
+        (factory, token0, token1, tickLower, tickUpper,fee) = IFactory(msg.sender).parameters();
     }
 
     function initialize(uint160 _sqrtPriceX96) external override {
         require(sqrtPriceX96 == 0, "Already initialized");
          // 通过价格获取 tick，判断 tick 是否在 tickLower 和 tickUpper 之间
-        tick=TickMath.getTickAtSqrtRatio(_sqrtPriceX96);
+        tick=TickMath.getTickAtSqrtPrice(_sqrtPriceX96);
         require(tick >= tickLower && tick <= tickUpper, "sqrtPriceX96 should be within the range of [tickLower, tickUpper)");
         // 初始化 Pool 的 sqrtPriceX96
         sqrtPriceX96 = _sqrtPriceX96;
@@ -83,11 +86,7 @@ contract Pool is IPool {
         external override returns (uint256 amount0,uint256 amount1){
             require(amount > 0, "Amount must be greater than 0");
             // 基于 amount 计算出当前需要多少 amount0 和 amount1
-            (int256 amount0Int,int256 amount1Int) = _modifyPosition(
-                ModifyPositionParams({
-                    owner: recipent, 
-                    liquidityDelta: amount
-                })
+            (int256 amount0Int,int256 amount1Int) = _modifyPosition(ModifyPositionParams({owner: recipent, liquidityDelta: int128(amount)})
             );
             amount0=uint256(amount0Int);
             amount1=uint256(amount1Int);
@@ -117,8 +116,8 @@ contract Pool is IPool {
         // 用到 SqrtPriceMath 库，这个库是 Uniswap V3 中的一个工具库
         // FullMath.sol 和 TickMath.sol 因为依赖于 solidity <0.8.0;这里用的是 0.8.0+，所以我们使用 Uniswap V4 的代码
         // 当前价格在一定在tick区间内，所以不需要考虑价格超出区间的情况
-        amount0=SqrtPriceMath.getAmount0Delta(sqrtPriceX96,TickMath.getSqrtRatioAtTick(tickUpper),params.liquidityDelta);
-        amount1=SqrtPriceMath.getAmount1Delta(sqrtPriceX96,TickMath.getSqrtRatioAtTick(tickLower),params.liquidityDelta);
+        amount0=SqrtPriceMath.getAmount0Delta(sqrtPriceX96,TickMath.getSqrtPriceAtTick(tickUpper),params.liquidityDelta);
+        amount1=SqrtPriceMath.getAmount1Delta(sqrtPriceX96,TickMath.getSqrtPriceAtTick(tickLower),params.liquidityDelta);
 
         // 获取当前用户的 position，recipient 应该改为 msg.sender
         Position storage position = positions[params.owner];
@@ -235,7 +234,7 @@ contract Pool is IPool {
         );
 
         bool exactInput=amountSpecified>0; //判断是输入还是输出模式
-        SwapState memory state =SwapState({
+        SwapParams memory state = SwapParams({
             amountSpecifiedRemaining: amountSpecified,
             amountCalculated: 0,
             sqrtPriceX96: sqrtPriceX96,
@@ -251,17 +250,16 @@ contract Pool is IPool {
         uint160 sqrtPriceX96Upper =TickMath.getSqrtRatioAtTick(tickUpper);
         // 计算用户交易价格的限制，如果是 zeroForOne 是 true，说明用户会换入 token0，
         // 会压低 token0 的价格（也就是池子的价格），所以要限制最低价格不能超过 sqrtPriceX96Lower
-        uint160 sqrtPriceX96PoolLimit  == zeroForOne
+        uint160 sqrtPriceX96PoolLimit = zeroForOne
             ? sqrtPriceX96Lower
             : sqrtPriceX96Upper;
         //  SwapMath.computeSwapStep 计算当前步骤的输入量、输出量、费用和新价格。
-        (state.sqrtPriceX96,state.amountIn,state.amountOut,state.feeAmount)=SwapMath.computeSwapStep(
-            sqrtPriceX96,
+        (state.sqrtPriceX96,state.amountIn,state.amountOut,state.feeAmount)=SwapMath.computeSwapStep(sqrtPriceX96,
             (zeroForOne ? sqrtPriceX96PoolLimit < sqrtPriceLimitX96 : sqrtPriceX96PoolLimit > sqrtPriceLimitX96)
             ?sqrtPriceLimitX96:sqrtPriceX96PoolLimit,
             liquidity,
             amountSpecified, // 第一次剩余需要交换的数量=指定输入的代币数量(要支付的 token0 的数量)
-            fee,
+            fee
         );
 
         //更新后的价格
@@ -312,7 +310,7 @@ contract Pool is IPool {
             }
         else{
            // callback 中需要给 Pool 转入 token
-            uint256 balance1Before = balance1();
+            uint256 balance1Before = _balance1();
             ISwapCallback(msg.sender).swapCallback(amount0, amount1, data);
             require(balance1Before.add(uint256(amount1))<=_balance1(), "IIA");
              // 转 Token 给用户

@@ -57,8 +57,7 @@ interface IPool {
         uint256 amount0, 
         uint256 amount1);
 
-    function collect(address recipient, uint128 amount, bytes calldata data)
-    external returns (uint256 amount0, uint256 amount1);
+    function collect(address recipient, uint128 amount, bytes calldata data) external returns (uint128 amount0, uint128 amount1);
 
     event Burn(
         address indexed owner, 
