@@ -26,3 +26,25 @@ PositionManager.sol: 顶层合约，对应 Position 页面，负责 LP 头寸和
 SwapRouter.sol: 顶层合约，对应 Swap 页面，负责预估价格和交易；
 Factory.sol: 底层合约，Pool 的工厂合约；
 Pool.sol: 最底层合约，对应一个交易池，记录了当前价格、头寸、流动性等信息。
+
+在 AMM（自动做市商）交易中，有两种基本的交易模式：
+
+1. ExactInput（指定输入）
+   用户指定：我要用多少 tokenIn
+   系统计算：你能得到多少 tokenOut
+   风险：滑点风险（可能得到的 tokenOut 比预期少）
+2. ExactOutput（指定输出）
+   用户指定：我要得到多少 tokenOut
+   系统计算：你需要用多少 tokenIn
+   风险：滑点风险（可能需要用的 tokenIn 比预期多）
+   // 交易方向：tokenIn -> tokenOut
+   address tokenIn; // 输入代币地址（你要花掉的代币）
+   address tokenOut; // 输出代币地址（你要得到的代币）
+
+   // 实际交易数量
+   uint256 amountIn; // 实际使用的输入代币数量
+   uint256 amountOut; // 实际得到的输出代币数量
+
+   // 滑点保护参数
+   uint256 amountInMaximum; // 最多愿意使用的输入代币数量（滑点保护上限）
+   uint256 amountOutMinimum; // 最少要得到的输出代币数量（滑点保护下限）

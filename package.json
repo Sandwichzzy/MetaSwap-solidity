@@ -9,6 +9,10 @@
   "scripts": {
     "test": "hardhat test",
     "test:factory": "hardhat test test/moduleTest/FactoryTest.js",
+    "test:pool": "hardhat test test/moduleTest/PoolTest.js",
+    "test:pool-manager": "hardhat test test/moduleTest/PoolManager.js",
+    "test:position-manager": "hardhat test test/moduleTest/PositionManager.js",
+    "test:swap-router": "hardhat test test/moduleTest/SwapRouterTest.js",
     "test:coverage": "hardhat coverage"
   },
   "devDependencies": {
@@ -21,6 +25,7 @@
     "@nomicfoundation/hardhat-verify": "^2.1.1",
     "@typechain/ethers-v6": "^0.5.1",
     "@typechain/hardhat": "^9.1.0",
+    "@uniswap/v3-sdk": "^3.25.2",
     "chai": "^4.5.0",
     "dotenv": "^17.2.2",
     "ethers": "^6.15.0",

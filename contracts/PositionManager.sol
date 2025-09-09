@@ -12,6 +12,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "./libraries/LiquidityAmounts.sol";
 import "./libraries/TickMath.sol";
 import "./libraries/FixedPoint128.sol";
+import "./libraries/FullMath.sol";
 
 import "./interfaces/IPositionManager.sol";
 import "./interfaces/IPool.sol";
@@ -166,6 +167,8 @@ contract PositionManager is IPositionManager, ERC721{
         return positionInfo;
     }
 
+    // Pool.mint() 调用了 IMintCallback(msg.sender).mintCallback(amount0, amount1, data)
+    // 回调方法，PositionManager 给 Pool 打钱
     function mintCallback(uint256 amount0, uint256 amount1, bytes calldata data) external override{
         //检查callback 的合约地址是否是pool
         (address token0,address token1,uint32 index,address payer)=abi.decode(data,(address,address,uint32,address));
@@ -174,10 +177,10 @@ contract PositionManager is IPositionManager, ERC721{
 
         // 在这里给 Pool 打钱，需要用户先 approve 足够的金额，这里才会成功
         if(amount0>0){
-            IERC20(token0).transferFrom(payer,address(this),amount0);
+            IERC20(token0).transferFrom(payer,msg.sender,amount0);
         }
         if(amount1>0){
-            IERC20(token1).transferFrom(payer,address(this),amount1);
+            IERC20(token1).transferFrom(payer,msg.sender,amount1);
         }
     }
 }

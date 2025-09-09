@@ -13,27 +13,27 @@ interface ISwapRouter is ISwapCallback{
     );
 
     struct ExactInputParams {
-        address tokenIn;
-        address tokenOut;
-        uint32[] indexPath;
-        address recipient;
-        uint256 deadline;
-        uint256 amountIn;
-        uint256 amountOutMinimum;
-        uint160 sqrtPriceLimitX96;
+        address tokenIn;           // 输入代币
+        address tokenOut;          // 输出代币
+        uint32[] indexPath;        // 交易路径
+        address recipient;         // 接收者
+        uint256 deadline;          // 截止时间
+        uint256 amountIn;          // 指定输入数量（用户确定）
+        uint256 amountOutMinimum;  // 最少输出数量（滑点保护）
+        uint160 sqrtPriceLimitX96; // 价格限制
     }
 
     function exactInput(ExactInputParams calldata params) external payable returns (uint256 amountOut);
     
     struct ExactOutputParams {
-        address tokenIn;
-        address tokenOut;
-        uint32[] indexPath;
-        address recipient;
-        uint256 deadline;
-        uint256 amountOut;
-        uint256 amountInMaximum;
-        uint160 sqrtPriceLimitX96;
+        address tokenIn;           // 输入代币
+        address tokenOut;          // 输出代币
+        uint32[] indexPath;        // 交易路径
+        address recipient;         // 接收者
+        uint256 deadline;          // 截止时间
+        uint256 amountOut;         // 指定输出数量（用户确定）
+        uint256 amountInMaximum;   // 最多输入数量（滑点保护）
+        uint160 sqrtPriceLimitX96; // 价格限制
     }
 
      function exactOutput(

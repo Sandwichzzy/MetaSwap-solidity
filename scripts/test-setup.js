@@ -1,4 +1,5 @@
 const { ethers } = require("hardhat");
+const { TickMath, encodeSqrtRatioX96 } = require("@uniswap/v3-sdk");
 
 // 创建简单的ERC20测试代币函数
 async function deployTestToken(name, symbol, totalSupply) {
@@ -53,12 +54,12 @@ const testUtils = {
     const tokenA = await deployTestTokenFn(
       "Token A",
       "TKNA",
-      ethers.parseEther("1000000")
+      ethers.parseEther("100000000000000000000")
     );
     const tokenB = await deployTestTokenFn(
       "Token B",
       "TKNB",
-      ethers.parseEther("1000000")
+      ethers.parseEther("100000000000000000000")
     );
     return { tokenA, tokenB };
   },
@@ -81,14 +82,15 @@ const testUtils = {
     FEE_TIER_LOW: 500, // 0.05%
     FEE_TIER_MEDIUM: 3000, // 0.3%
     FEE_TIER_HIGH: 10000, // 1%
-    TICK_LOWER: -887272, // 最小tick
-    TICK_UPPER: 887272, // 最大tick
-    MIN_TICK: -887272,
-    MAX_TICK: 887272,
+    TICK_LOWER: TickMath.getTickAtSqrtRatio(encodeSqrtRatioX96(1, 1)),
+    TICK_UPPER: TickMath.getTickAtSqrtRatio(encodeSqrtRatioX96(40000, 1)),
+    MIN_TICK: TickMath.MIN_TICK,
+    MAX_TICK: TickMath.MAX_TICK,
   },
 };
 
 module.exports = {
   setUpTestEnvironment,
+  deployTestToken,
   testUtils,
 };
